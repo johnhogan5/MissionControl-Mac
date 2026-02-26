@@ -6,6 +6,7 @@ enum Persistence {
     static let eventsKey = "missioncontrol.mac.events"
     static let journalKey = "missioncontrol.mac.journal"
     static let cronJobsKey = "missioncontrol.mac.cronjobs"
+    static let latencySamplesKey = "missioncontrol.mac.latencySamples"
 
     static func saveProfile(_ profile: ConnectionProfile) {
         if let data = try? JSONEncoder().encode(profile) {
@@ -85,5 +86,13 @@ enum Persistence {
             ]
         }
         return jobs
+    }
+
+    static func saveLatencySamples(_ samples: [Int]) {
+        UserDefaults.standard.set(samples.suffix(500), forKey: latencySamplesKey)
+    }
+
+    static func loadLatencySamples() -> [Int] {
+        UserDefaults.standard.array(forKey: latencySamplesKey) as? [Int] ?? []
     }
 }

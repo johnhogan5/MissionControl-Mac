@@ -20,6 +20,15 @@ struct SettingsView: View {
                 }
             }
 
+            if !store.settingsValidationErrors.isEmpty {
+                Section("Validation") {
+                    ForEach(store.settingsValidationErrors, id: \.self) { issue in
+                        Label(issue, systemImage: "exclamationmark.triangle.fill")
+                            .foregroundStyle(MCColor.red)
+                    }
+                }
+            }
+
             Section {
                 HStack {
                     Button("Save") { store.saveProfile() }
@@ -33,7 +42,7 @@ struct SettingsView: View {
                     Spacer()
 
                     Text(store.connectionLabel)
-                        .foregroundStyle(store.isConnected ? .green : .secondary)
+                        .foregroundStyle(store.isConnected ? MCColor.green : MCColor.textSecondary)
                 }
             }
         }

@@ -52,6 +52,8 @@ struct DashboardView: View {
                 )
             }
 
+            quickStatsCard
+
             HStack(alignment: .top, spacing: MCSpacing.md) {
                 operationsCard
                 activeSessionCard
@@ -60,6 +62,18 @@ struct DashboardView: View {
             eventsCard
         }
         .frame(maxWidth: .infinity, alignment: .leading)
+    }
+
+    private var quickStatsCard: some View {
+        MCCard {
+            HStack(spacing: MCSpacing.lg) {
+                statChip(title: "Requests Today", value: "\(store.requestsToday)", tint: MCColor.accent)
+                statChip(title: "Errors Today", value: "\(store.errorsToday)", tint: MCColor.red)
+                statChip(title: "Avg Latency", value: store.averageLatencyMs.map { "\($0) ms" } ?? "—", tint: MCColor.orange)
+                Spacer()
+            }
+            .frame(maxWidth: .infinity, alignment: .leading)
+        }
     }
 
     private var operationsCard: some View {
@@ -120,6 +134,13 @@ struct DashboardView: View {
                     .foregroundStyle(MCColor.textPrimary)
 
                 if let session = store.selectedSession {
+                    Picker("Session", selection: $store.selectedSessionID) {
+                        ForEach(store.sessions) { session in
+                            Text(session.title).tag(Optional(session.id))
+                        }
+                    }
+                    .labelsHidden()
+
                     Text(session.title)
                         .font(.system(size: 16, weight: .semibold))
                         .foregroundStyle(MCColor.textPrimary)
@@ -202,6 +223,18 @@ struct DashboardView: View {
             }
             .frame(maxWidth: .infinity, alignment: .leading)
         }
+    }
+
+    private func statChip(title: String, value: String, tint: Color) -> some View {
+        VStack(alignment: .leading, spacing: 4) {
+            Text(title.uppercased())
+                .font(MCFont.tiny)
+                .foregroundStyle(MCColor.textTertiary)
+            Text(value)
+                .font(.system(size: 20, weight: .bold))
+                .foregroundStyle(tint)
+        }
+        .padding(.vertical, 2)
     }
 
     private func statCard(title: String, value: String, hint: String, dot: Color) -> some View {

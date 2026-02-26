@@ -10,6 +10,7 @@ final class AppStore: ObservableObject {
     // Config/Auth
     @Published var profile: ConnectionProfile
     @Published var token: String
+    @Published var settingsValidationErrors: [String] = []
 
     // Runtime status
     @Published var isConnected: Bool = false
@@ -18,6 +19,7 @@ final class AppStore: ObservableObject {
     @Published var taskProgress: TaskProgress = TaskProgress()
     @Published var taskHistory: [TaskProgress] = []
     @Published var lastResponseLatencyMs: Int?
+    @Published var latencySamples: [Int]
     @Published var lastModelUsed: String?
     @Published var connectionErrorDetail: String?
 
@@ -38,6 +40,7 @@ final class AppStore: ObservableObject {
         self.events = Persistence.loadEvents()
         self.journalEntries = Persistence.loadJournal()
         self.cronJobs = Persistence.loadCronJobs()
+        self.latencySamples = Persistence.loadLatencySamples()
         self.selectedSessionID = self.sessions.first?.id
 
         addEvent(.info, "Mission Control initialized")
@@ -62,7 +65,33 @@ final class AppStore: ObservableObject {
         }
     }
 
+    var requestsToday: Int {
+        sessions.reduce(0) { partial, session in
+            partial + session.messages.filter {
+                $0.role == "user" && Calendar.current.isDateInToday($0.ts)
+            }.count
+        }
+    }
+
+    var errorsToday: Int {
+        events.filter {
+            $0.level == .error && Calendar.current.isDateInToday($0.ts)
+        }.count
+    }
+
+    var averageLatencyMs: Int? {
+        guard !latencySamples.isEmpty else { return nil }
+        return Int(Double(latencySamples.reduce(0, +)) / Double(latencySamples.count))
+    }
+
     func saveProfile() {
+        settingsValidationErrors = validateSettings()
+        guard settingsValidationErrors.isEmpty else {
+            connectionErrorDetail = settingsValidationErrors.first
+            addEvent(.error, "Profile validation failed")
+            return
+        }
+
         Persistence.saveProfile(profile)
         Keychain.save(token, key: tokenKey)
         addEvent(.info, "Profile saved")
@@ -116,6 +145,11 @@ final class AppStore: ObservableObject {
         addEvent(.warning, "Deleted local session")
     }
 
+    func clearEvents() {
+        events = []
+        Persistence.saveEvents([])
+    }
+
     func sendMessage(_ text: String) async {
         let payload = text.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !payload.isEmpty else { return }
@@ -131,15 +165,10 @@ final class AppStore: ObservableObject {
             ]
         )
 
-        guard !normalizedBaseURL.isEmpty else {
-            failTask("Missing gateway URL")
-            addEvent(.error, "Missing gateway URL")
-            return
-        }
-
-        guard !token.isEmpty else {
-            failTask("Missing gateway token")
-            addEvent(.error, "Missing gateway token")
+        settingsValidationErrors = validateSettings(requireToken: true)
+        guard settingsValidationErrors.isEmpty else {
+            failTask(settingsValidationErrors.first ?? "Invalid settings")
+            addEvent(.error, "Settings invalid")
             return
         }
 
@@ -192,7 +221,11 @@ final class AppStore: ObservableObject {
             sessions[idx].updatedAt = Date()
             Persistence.saveSessions(sessions)
 
-            lastResponseLatencyMs = Int(Date().timeIntervalSince(started) * 1000)
+            let latencyMs = Int(Date().timeIntervalSince(started) * 1000)
+            lastResponseLatencyMs = latencyMs
+            latencySamples.append(latencyMs)
+            if latencySamples.count > 500 { latencySamples = Array(latencySamples.suffix(500)) }
+            Persistence.saveLatencySamples(latencySamples)
             lastModelUsed = profile.model
 
             advanceTask(stepIndex: 3, detail: "Session updated", percent: 0.95)
@@ -218,11 +251,12 @@ final class AppStore: ObservableObject {
             ]
         )
 
-        guard !normalizedBaseURL.isEmpty, !token.isEmpty else {
+        settingsValidationErrors = validateSettings(requireToken: true)
+        guard settingsValidationErrors.isEmpty else {
             isConnected = false
             connectionLabel = "Not configured"
-            connectionErrorDetail = "Add gateway URL and token in Settings."
-            failTask("Missing gateway URL or token")
+            connectionErrorDetail = settingsValidationErrors.first
+            failTask("Missing or invalid gateway settings")
             return
         }
 
@@ -303,5 +337,29 @@ final class AppStore: ObservableObject {
         events.insert(AppEvent(level: level, message: message), at: 0)
         if events.count > 500 { events = Array(events.prefix(500)) }
         Persistence.saveEvents(events)
+    }
+
+    private func validateSettings(requireToken: Bool = false) -> [String] {
+        var issues: [String] = []
+
+        if normalizedBaseURL.isEmpty {
+            issues.append("Gateway URL is required.")
+        } else if URL(string: normalizedBaseURL) == nil || !(normalizedBaseURL.hasPrefix("http://") || normalizedBaseURL.hasPrefix("https://")) {
+            issues.append("Gateway URL must start with http:// or https://")
+        }
+
+        if requireToken && token.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+            issues.append("Gateway token is required.")
+        }
+
+        if profile.model.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+            issues.append("Default model cannot be empty.")
+        }
+
+        if profile.defaultSessionKey.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+            issues.append("Default session key cannot be empty.")
+        }
+
+        return issues
     }
 }
