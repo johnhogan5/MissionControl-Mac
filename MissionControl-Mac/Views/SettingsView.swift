@@ -8,20 +8,12 @@ struct SettingsView: View {
             Section("Connection Profile") {
                 TextField("Profile Name", text: $store.profile.name)
                 TextField("Gateway URL", text: $store.profile.baseURL)
-                    .textInputAutocapitalization(.never)
-                    .autocorrectionDisabled()
                 SecureField("Gateway Token", text: $store.token)
-                    .textInputAutocapitalization(.never)
-                    .autocorrectionDisabled()
                 TextField("Default Session Key", text: $store.profile.defaultSessionKey)
-                    .textInputAutocapitalization(.never)
-                    .autocorrectionDisabled()
             }
 
             Section("Model + Polling") {
                 TextField("Default Model", text: $store.profile.model)
-                    .textInputAutocapitalization(.never)
-                    .autocorrectionDisabled()
 
                 Stepper(value: $store.profile.healthPollingSeconds, in: 5...120, step: 5) {
                     Text("Health poll interval: \(store.profile.healthPollingSeconds)s")
