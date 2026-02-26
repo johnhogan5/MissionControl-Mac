@@ -8,6 +8,8 @@ struct MissionControlMacApp: App {
         WindowGroup {
             AppShellView()
                 .environmentObject(store)
+                .preferredColorScheme(.dark)
+                .tint(MCColor.accent)
                 .frame(minWidth: 1100, minHeight: 740)
         }
         .windowStyle(.titleBar)
