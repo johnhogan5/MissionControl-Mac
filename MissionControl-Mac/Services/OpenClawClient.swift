@@ -60,6 +60,48 @@ final class OpenClawClient {
         return true
     }
 
+    func fetchGatewaySessions(baseURL: String, token: String, limit: Int = 100) async throws -> [GatewaySessionSummary] {
+        let req = try buildRequest(
+            baseURL: baseURL,
+            path: "/v1/sessions?limit=\(max(1, min(limit, 500)))",
+            token: token,
+            method: "GET",
+            body: Optional<ResponseRequest>.none,
+            stream: false,
+            sessionKey: nil
+        )
+
+        let (data, response) = try await session.data(for: req)
+        guard let http = response as? HTTPURLResponse else { throw OpenClawClientError.invalidResponse }
+        guard (200..<300).contains(http.statusCode) else {
+            let text = String(data: data, encoding: .utf8) ?? ""
+            throw OpenClawClientError.server(statusCode: http.statusCode, message: text)
+        }
+
+        return Self.parseGatewaySessions(from: data)
+    }
+
+    func fetchGatewayStatus(baseURL: String, token: String) async throws -> GatewayStatusSnapshot {
+        let req = try buildRequest(
+            baseURL: baseURL,
+            path: "/status",
+            token: token,
+            method: "GET",
+            body: Optional<ResponseRequest>.none,
+            stream: false,
+            sessionKey: nil
+        )
+
+        let (data, response) = try await session.data(for: req)
+        guard let http = response as? HTTPURLResponse else { throw OpenClawClientError.invalidResponse }
+        guard (200..<300).contains(http.statusCode) else {
+            let text = String(data: data, encoding: .utf8) ?? ""
+            throw OpenClawClientError.server(statusCode: http.statusCode, message: text)
+        }
+
+        return Self.parseGatewayStatus(from: data)
+    }
+
     func streamResponse(
         baseURL: String,
         token: String,
@@ -149,6 +191,85 @@ final class OpenClawClient {
         }
 
         return components.url
+    }
+
+    private static func parseGatewaySessions(from data: Data) -> [GatewaySessionSummary] {
+        guard let json = try? JSONSerialization.jsonObject(with: data) else { return [] }
+
+        let rows: [[String: Any]]
+        if let list = json as? [[String: Any]] {
+            rows = list
+        } else if let object = json as? [String: Any] {
+            if let sessions = object["sessions"] as? [[String: Any]] {
+                rows = sessions
+            } else if let items = object["items"] as? [[String: Any]] {
+                rows = items
+            } else if let dataRows = object["data"] as? [[String: Any]] {
+                rows = dataRows
+            } else {
+                rows = []
+            }
+        } else {
+            rows = []
+        }
+
+        return rows.compactMap { row in
+            let id = (row["sessionKey"] as? String)
+                ?? (row["session_key"] as? String)
+                ?? (row["id"] as? String)
+            guard let id else { return nil }
+
+            let title = (row["title"] as? String)
+                ?? (row["name"] as? String)
+                ?? id
+
+            let messageCount = (row["messageCount"] as? Int)
+                ?? (row["message_count"] as? Int)
+                ?? (row["messages"] as? [[String: Any]])?.count
+
+            let updatedAtString = (row["updatedAt"] as? String)
+                ?? (row["updated_at"] as? String)
+                ?? (row["lastSeen"] as? String)
+
+            return GatewaySessionSummary(
+                id: id,
+                title: title,
+                updatedAt: dateFromPossiblyISO(updatedAtString),
+                messageCount: messageCount
+            )
+        }
+    }
+
+    private static func parseGatewayStatus(from data: Data) -> GatewayStatusSnapshot {
+        guard let object = (try? JSONSerialization.jsonObject(with: data)) as? [String: Any] else {
+            return GatewayStatusSnapshot(uptimeSec: nil, activeSessions: nil, model: nil)
+        }
+
+        let uptimeSec = (object["uptimeSec"] as? Int)
+            ?? (object["uptime_sec"] as? Int)
+            ?? (object["uptime"] as? Int)
+
+        let activeSessions = (object["activeSessions"] as? Int)
+            ?? (object["active_sessions"] as? Int)
+            ?? (object["sessions"] as? Int)
+
+        let model = (object["model"] as? String)
+            ?? (object["defaultModel"] as? String)
+            ?? (object["default_model"] as? String)
+
+        return GatewayStatusSnapshot(uptimeSec: uptimeSec, activeSessions: activeSessions, model: model)
+    }
+
+    private static func dateFromPossiblyISO(_ value: String?) -> Date? {
+        guard let value, !value.isEmpty else { return nil }
+
+        let isoWithFractional = ISO8601DateFormatter()
+        isoWithFractional.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
+        if let date = isoWithFractional.date(from: value) { return date }
+
+        let iso = ISO8601DateFormatter()
+        iso.formatOptions = [.withInternetDateTime]
+        return iso.date(from: value)
     }
 
     private static func extractDelta(from line: String) -> String? {

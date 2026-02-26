@@ -22,6 +22,10 @@ final class AppStore: ObservableObject {
     @Published var latencySamples: [Int]
     @Published var lastModelUsed: String?
     @Published var connectionErrorDetail: String?
+    @Published var gatewaySessions: [GatewaySessionSummary] = []
+    @Published var gatewayStatus: GatewayStatusSnapshot?
+    @Published var isRefreshingGatewayData: Bool = false
+    @Published var gatewaySyncError: String?
 
     // Data
     @Published var sessions: [LocalSession]
@@ -45,7 +49,10 @@ final class AppStore: ObservableObject {
 
         addEvent(.info, "Mission Control initialized")
         startHealthPolling()
-        Task { await runHealthCheck() }
+        Task {
+            await runHealthCheck()
+            await refreshGatewayData()
+        }
     }
 
     var normalizedBaseURL: String {
@@ -84,6 +91,14 @@ final class AppStore: ObservableObject {
         return Int(Double(latencySamples.reduce(0, +)) / Double(latencySamples.count))
     }
 
+    var effectiveActiveSessions: Int {
+        gatewayStatus?.activeSessions ?? gatewaySessions.count
+    }
+
+    var effectiveModel: String {
+        gatewayStatus?.model ?? lastModelUsed ?? profile.model
+    }
+
     func saveProfile() {
         settingsValidationErrors = validateSettings()
         guard settingsValidationErrors.isEmpty else {
@@ -96,7 +111,10 @@ final class AppStore: ObservableObject {
         Keychain.save(token, key: tokenKey)
         addEvent(.info, "Profile saved")
         startHealthPolling()
-        Task { await runHealthCheck() }
+        Task {
+            await runHealthCheck()
+            await refreshGatewayData()
+        }
     }
 
     func addSession() {
@@ -231,12 +249,40 @@ final class AppStore: ObservableObject {
             advanceTask(stepIndex: 3, detail: "Session updated", percent: 0.95)
             completeTask("Request completed successfully")
             addEvent(.info, "Response received (streaming)")
+            Task { await refreshGatewayData() }
         } catch {
             sessions[idx].messages.append(ChatMessage(role: "assistant", text: "Error: \(error.localizedDescription)"))
             sessions[idx].updatedAt = Date()
             Persistence.saveSessions(sessions)
             failTask("Request failed: \(error.localizedDescription)")
             addEvent(.error, "Send failed: \(error.localizedDescription)")
+        }
+    }
+
+    func refreshGatewayData() async {
+        settingsValidationErrors = validateSettings(requireToken: true)
+        guard settingsValidationErrors.isEmpty else {
+            gatewaySyncError = settingsValidationErrors.first
+            gatewaySessions = []
+            gatewayStatus = nil
+            return
+        }
+
+        isRefreshingGatewayData = true
+        defer { isRefreshingGatewayData = false }
+
+        do {
+            async let statusTask = OpenClawClient.shared.fetchGatewayStatus(baseURL: normalizedBaseURL, token: token)
+            async let sessionsTask = OpenClawClient.shared.fetchGatewaySessions(baseURL: normalizedBaseURL, token: token)
+
+            let (status, sessions) = try await (statusTask, sessionsTask)
+            gatewayStatus = status
+            gatewaySessions = sessions
+            gatewaySyncError = nil
+            addEvent(.info, "Gateway data synced")
+        } catch {
+            gatewaySyncError = error.localizedDescription
+            addEvent(.warning, "Gateway sync failed: \(error.localizedDescription)")
         }
     }
 

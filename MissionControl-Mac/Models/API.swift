@@ -28,3 +28,23 @@ struct ResponseContent: Codable {
     let type: String?
     let text: String?
 }
+
+struct GatewaySessionSummary: Identifiable, Codable {
+    let id: String
+    let title: String
+    let updatedAt: Date?
+    let messageCount: Int?
+
+    init(id: String, title: String, updatedAt: Date? = nil, messageCount: Int? = nil) {
+        self.id = id
+        self.title = title
+        self.updatedAt = updatedAt
+        self.messageCount = messageCount
+    }
+}
+
+struct GatewayStatusSnapshot: Codable {
+    let uptimeSec: Int?
+    let activeSessions: Int?
+    let model: String?
+}

@@ -32,15 +32,15 @@ struct DashboardView: View {
 
                 statCard(
                     title: "Model",
-                    value: store.lastModelUsed ?? store.profile.model,
-                    hint: "Default configured model",
+                    value: store.effectiveModel,
+                    hint: "Gateway/default model",
                     dot: MCColor.accent
                 )
 
                 statCard(
-                    title: "Sessions",
-                    value: "\(store.sessions.count)",
-                    hint: "Locally saved sessions",
+                    title: "Active Sessions",
+                    value: "\(store.effectiveActiveSessions)",
+                    hint: store.gatewaySessions.isEmpty ? "No gateway sessions yet" : "Live from gateway",
                     dot: MCColor.orange
                 )
 
@@ -102,6 +102,12 @@ struct DashboardView: View {
                     }
                     .buttonStyle(.bordered)
 
+                    Button(store.isRefreshingGatewayData ? "Refreshing…" : "Refresh Gateway") {
+                        Task { await store.refreshGatewayData() }
+                    }
+                    .buttonStyle(.bordered)
+                    .disabled(store.isRefreshingGatewayData)
+
                     Button("New Session") {
                         store.addSession()
                     }
@@ -119,6 +125,12 @@ struct DashboardView: View {
                     Text("Use this panel as your control center for fast checks and test prompts.")
                         .font(MCFont.caption)
                         .foregroundStyle(MCColor.textSecondary)
+                }
+
+                if let gatewaySyncError = store.gatewaySyncError, !gatewaySyncError.isEmpty {
+                    Label(gatewaySyncError, systemImage: "exclamationmark.triangle.fill")
+                        .font(MCFont.caption)
+                        .foregroundStyle(MCColor.orange)
                 }
             }
             .frame(maxWidth: .infinity, minHeight: 220, alignment: .topLeading)
