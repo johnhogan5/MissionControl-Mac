@@ -2,20 +2,34 @@ import Foundation
 import Security
 
 enum Keychain {
+    private static let service = "MissionControl-Mac"
+
     static func save(_ value: String, key: String) {
         let data = Data(value.utf8)
+
         let query: [String: Any] = [
             kSecClass as String: kSecClassGenericPassword,
-            kSecAttrAccount as String: key,
-            kSecValueData as String: data
+            kSecAttrService as String: service,
+            kSecAttrAccount as String: key
         ]
-        SecItemDelete(query as CFDictionary)
-        SecItemAdd(query as CFDictionary, nil)
+
+        let attributes: [String: Any] = [
+            kSecValueData as String: data,
+            kSecAttrAccessible as String: kSecAttrAccessibleAfterFirstUnlock
+        ]
+
+        let updateStatus = SecItemUpdate(query as CFDictionary, attributes as CFDictionary)
+        if updateStatus == errSecItemNotFound {
+            var create = query
+            attributes.forEach { create[$0.key] = $0.value }
+            SecItemAdd(create as CFDictionary, nil)
+        }
     }
 
     static func load(key: String) -> String {
         let query: [String: Any] = [
             kSecClass as String: kSecClassGenericPassword,
+            kSecAttrService as String: service,
             kSecAttrAccount as String: key,
             kSecReturnData as String: true,
             kSecMatchLimit as String: kSecMatchLimitOne
@@ -32,5 +46,14 @@ enum Keychain {
         }
 
         return value
+    }
+
+    static func delete(key: String) {
+        let query: [String: Any] = [
+            kSecClass as String: kSecClassGenericPassword,
+            kSecAttrService as String: service,
+            kSecAttrAccount as String: key
+        ]
+        SecItemDelete(query as CFDictionary)
     }
 }

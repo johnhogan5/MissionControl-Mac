@@ -1,51 +1,63 @@
 import Foundation
 
+enum OpenClawClientError: LocalizedError {
+    case invalidBaseURL
+    case invalidResponse
+    case server(statusCode: Int, message: String)
+
+    var errorDescription: String? {
+        switch self {
+        case .invalidBaseURL:
+            return "Gateway URL is invalid."
+        case .invalidResponse:
+            return "Received an invalid server response."
+        case let .server(statusCode, message):
+            if message.isEmpty {
+                return "Server error (\(statusCode))."
+            }
+            return "Server error (\(statusCode)): \(message)"
+        }
+    }
+}
+
 final class OpenClawClient {
     static let shared = OpenClawClient()
-    private init() {}
 
-    func health(baseURL: String, token: String) async throws -> Bool {
-        guard let url = URL(string: baseURL + "/health") else { throw URLError(.badURL) }
-        var req = URLRequest(url: url)
-        req.httpMethod = "GET"
-        req.setValue("Bearer \(token)", forHTTPHeaderField: "Authorization")
-        let (_, response) = try await URLSession.shared.data(for: req)
-        guard let http = response as? HTTPURLResponse else { return false }
-        return (200..<300).contains(http.statusCode)
+    private let session: URLSession
+
+    private init() {
+        let config = URLSessionConfiguration.default
+        config.timeoutIntervalForRequest = 30
+        config.timeoutIntervalForResource = 120
+        config.waitsForConnectivity = true
+        config.requestCachePolicy = .reloadIgnoringLocalCacheData
+        self.session = URLSession(configuration: config)
     }
 
-    func sendResponse(
-        baseURL: String,
-        token: String,
-        sessionKey: String,
-        model: String,
-        input: String
-    ) async throws -> String {
+    func health(baseURL: String, token: String) async throws -> Bool {
         let req = try buildRequest(
             baseURL: baseURL,
+            path: "/health",
             token: token,
-            sessionKey: sessionKey,
-            model: model,
-            input: input,
-            stream: false
+            method: "GET",
+            body: Optional<ResponseRequest>.none,
+            stream: false,
+            sessionKey: nil
         )
 
-        let (data, response) = try await URLSession.shared.data(for: req)
-        guard let http = response as? HTTPURLResponse else { throw URLError(.badServerResponse) }
+        let (data, response) = try await session.data(for: req)
+        guard let http = response as? HTTPURLResponse else { throw OpenClawClientError.invalidResponse }
 
         guard (200..<300).contains(http.statusCode) else {
-            let text = String(data: data, encoding: .utf8) ?? "Unknown server error"
-            throw NSError(domain: "OpenClawClient", code: http.statusCode, userInfo: [NSLocalizedDescriptionKey: text])
+            let text = String(data: data, encoding: .utf8) ?? ""
+            throw OpenClawClientError.server(statusCode: http.statusCode, message: text)
         }
 
-        let decoded = try JSONDecoder().decode(ResponseEnvelope.self, from: data)
-        let text = decoded.output?
-            .flatMap { $0.content ?? [] }
-            .compactMap { $0.text }
-            .joined(separator: "\n")
-            .trimmingCharacters(in: .whitespacesAndNewlines)
+        if let decoded = try? JSONDecoder().decode(HealthResponse.self, from: data), let ok = decoded.ok {
+            return ok
+        }
 
-        return (text?.isEmpty == false) ? text! : "(No response text)"
+        return true
     }
 
     func streamResponse(
@@ -60,17 +72,18 @@ final class OpenClawClient {
                 do {
                     let req = try buildRequest(
                         baseURL: baseURL,
+                        path: "/v1/responses",
                         token: token,
-                        sessionKey: sessionKey,
-                        model: model,
-                        input: input,
-                        stream: true
+                        method: "POST",
+                        body: ResponseRequest(model: model, input: input, stream: true),
+                        stream: true,
+                        sessionKey: sessionKey.isEmpty ? nil : sessionKey
                     )
 
-                    let (bytes, response) = try await URLSession.shared.bytes(for: req)
-                    guard let http = response as? HTTPURLResponse else { throw URLError(.badServerResponse) }
+                    let (bytes, response) = try await session.bytes(for: req)
+                    guard let http = response as? HTTPURLResponse else { throw OpenClawClientError.invalidResponse }
                     guard (200..<300).contains(http.statusCode) else {
-                        throw NSError(domain: "OpenClawClient", code: http.statusCode, userInfo: [NSLocalizedDescriptionKey: "Streaming request failed (\(http.statusCode))"])
+                        throw OpenClawClientError.server(statusCode: http.statusCode, message: "Streaming request failed")
                     }
 
                     for try await line in bytes.lines {
@@ -84,39 +97,63 @@ final class OpenClawClient {
                 }
             }
 
-            continuation.onTermination = { _ in
-                task.cancel()
-            }
+            continuation.onTermination = { _ in task.cancel() }
         }
     }
 
-    private func buildRequest(
+    private func buildRequest<T: Encodable>(
         baseURL: String,
+        path: String,
         token: String,
-        sessionKey: String,
-        model: String,
-        input: String,
-        stream: Bool
+        method: String,
+        body: T?,
+        stream: Bool,
+        sessionKey: String?
     ) throws -> URLRequest {
-        guard let url = URL(string: baseURL + "/v1/responses") else { throw URLError(.badURL) }
+        guard let url = Self.makeURL(baseURL: baseURL, path: path) else {
+            throw OpenClawClientError.invalidBaseURL
+        }
 
         var req = URLRequest(url: url)
-        req.httpMethod = "POST"
-        req.setValue("application/json", forHTTPHeaderField: "Content-Type")
+        req.httpMethod = method
         req.setValue("Bearer \(token)", forHTTPHeaderField: "Authorization")
-        req.setValue("text/event-stream", forHTTPHeaderField: "Accept")
-        if !sessionKey.isEmpty {
+        req.setValue(stream ? "text/event-stream" : "application/json", forHTTPHeaderField: "Accept")
+        req.setValue("no-store", forHTTPHeaderField: "Cache-Control")
+        req.setValue("MissionControl-Mac/1.0", forHTTPHeaderField: "User-Agent")
+
+        if let sessionKey, !sessionKey.isEmpty {
             req.setValue(sessionKey, forHTTPHeaderField: "x-openclaw-session-key")
         }
 
-        let body = ResponseRequest(model: model, input: input, stream: stream ? true : nil)
-        req.httpBody = try JSONEncoder().encode(body)
+        if let body {
+            req.setValue("application/json", forHTTPHeaderField: "Content-Type")
+            req.httpBody = try JSONEncoder().encode(body)
+        }
+
         return req
+    }
+
+    private static func makeURL(baseURL: String, path: String) -> URL? {
+        let trimmed = baseURL.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty else { return nil }
+
+        guard var components = URLComponents(string: trimmed) else { return nil }
+        let cleanPath = path.hasPrefix("/") ? path : "/\(path)"
+
+        let existingPath = components.path.trimmingCharacters(in: CharacterSet(charactersIn: "/"))
+        let incomingPath = cleanPath.trimmingCharacters(in: CharacterSet(charactersIn: "/"))
+        if existingPath.isEmpty {
+            components.path = "/\(incomingPath)"
+        } else {
+            components.path = "/\(existingPath)/\(incomingPath)"
+        }
+
+        return components.url
     }
 
     private static func extractDelta(from line: String) -> String? {
         let trimmed = line.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard !trimmed.isEmpty else { return nil }
+        guard !trimmed.isEmpty, !trimmed.hasPrefix("event:") else { return nil }
 
         let payload: String
         if trimmed.hasPrefix("data:") {
