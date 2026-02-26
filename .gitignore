@@ -1,0 +1,34 @@
+# Xcode user data
+xcuserdata/
+*.xcuserstate
+*.xcscmblueprint
+
+# Build artifacts
+DerivedData/
+.build/
+
+# Swift Package Manager
+.swiftpm/
+Packages/
+
+# CocoaPods / Carthage
+Pods/
+Carthage/Build/
+
+# Fastlane artifacts
+fastlane/report.xml
+fastlane/Preview.html
+fastlane/screenshots/**/*.png
+fastlane/test_output/
+
+# Environment / secrets
+.env
+.env.*
+*.p8
+*.p12
+*.cer
+*.mobileprovision
+GoogleService-Info.plist
+
+# macOS
+.DS_Store
